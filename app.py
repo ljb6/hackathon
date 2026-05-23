@@ -9,7 +9,8 @@ import cv2
 import torch.nn.functional as F
 from PIL import Image
 
-from embedder import embed_text
+from embedder import embed_text, embed_image
+from image_utils import uploaded_file_to_bgr
 from main import collect_all_candidates
 from query_builder import compose_query
 from search import RELATIVE_THRESHOLD
@@ -78,17 +79,36 @@ with st.sidebar:
 
     st.divider()
     st.header("🕵️ Suspeito")
-    upper_pt = st.selectbox("Cor — roupa superior", COLORS_UPPER_PT)
-    lower_pt = st.selectbox("Cor — roupa inferior", COLORS_LOWER_PT)
-    backpack = st.checkbox("Tem mochila")
-    hat = st.checkbox("Tem chapéu")
-    extra = st.text_input("Outras características (em inglês)")
+    uploaded_file = st.file_uploader(
+        "📎 Enviar foto do suspeito", type=["jpg", "jpeg", "png"]
+    )
 
-    # Translate PT colors to English for CLIP
-    upper_en = PT_TO_EN.get(upper_pt, "")
-    lower_en = PT_TO_EN.get(lower_pt, "")
-    query = compose_query(upper_en, lower_en, backpack, hat, extra)
-    st.info(f'**Query CLIP:** "{query}"')
+    suspect_bgr = None
+    query = None
+
+    if uploaded_file is not None:
+        try:
+            suspect_bgr = uploaded_file_to_bgr(uploaded_file)
+            if suspect_bgr.size == 0:
+                st.error("Imagem inválida. Tente outro arquivo.")
+                suspect_bgr = None
+        except Exception:
+            st.error("Não foi possível ler a imagem. Tente outro arquivo.")
+
+        if suspect_bgr is not None:
+            st.image(_crop_to_pil(suspect_bgr), width=120)
+            st.info("**Busca por imagem enviada**")
+            query = "imagem enviada"
+    else:
+        upper_pt = st.selectbox("Cor — roupa superior", COLORS_UPPER_PT)
+        lower_pt = st.selectbox("Cor — roupa inferior", COLORS_LOWER_PT)
+        backpack = st.checkbox("Tem mochila")
+        hat = st.checkbox("Tem chapéu")
+        extra = st.text_input("Outras características (em inglês)")
+        upper_en = PT_TO_EN.get(upper_pt, "")
+        lower_en = PT_TO_EN.get(lower_pt, "")
+        query = compose_query(upper_en, lower_en, backpack, hat, extra)
+        st.info(f'**Query CLIP:** "{query}"')
 
     st.divider()
     st.header("📅 Período")
@@ -108,8 +128,19 @@ with st.sidebar:
 
 # ── Search ────────────────────────────────────────────────────────────────────
 if search_btn:
+    if suspect_bgr is None and not query:
+        st.error("Imagem inválida. Tente outro arquivo.")
+        st.stop()
+
     baseline_emb = _baseline()
-    query_emb = embed_text(query)
+    if suspect_bgr is not None:
+        try:
+            query_emb = embed_image(suspect_bgr)
+        except Exception as e:
+            st.error(f"Não foi possível processar a imagem: {e}")
+            st.stop()
+    else:
+        query_emb = embed_text(query)
     tagged = []  # (camera_label, crop, img_emb, timestamp)
 
     with st.status("Processando câmeras…", expanded=True) as status:
