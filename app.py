@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import time as dtime, date as ddate, datetime
 import cv2
 import pandas as pd
+import pydeck as pdk
 import torch.nn.functional as F
 from PIL import Image
 
@@ -87,11 +88,35 @@ with st.sidebar:
 
     # Camera location map
     map_rows = [
-        {"lat": lat, "lon": lon, "câmera": f.stem}
+        {"lat": lat, "lon": lon, "câmera": f.stem, "icon": "📷"}
         for i, f in enumerate(video_files)
         for lat, lon in [_camera_coords(f.stem, i)]
     ]
-    st.map(pd.DataFrame(map_rows), zoom=16, use_container_width=True)
+    df_map = pd.DataFrame(map_rows)
+    center_lat = df_map["lat"].mean()
+    center_lon = df_map["lon"].mean()
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=[
+                pdk.Layer(
+                    "TextLayer",
+                    data=df_map,
+                    get_position=["lon", "lat"],
+                    get_text="icon",
+                    get_size=28,
+                    get_color=[0, 0, 0, 255],
+                    get_alignment_baseline="'bottom'",
+                )
+            ],
+            initial_view_state=pdk.ViewState(
+                latitude=center_lat,
+                longitude=center_lon,
+                zoom=16,
+            ),
+            map_style="mapbox://styles/mapbox/streets-v11",
+        ),
+        use_container_width=True,
+    )
 
     selected = [
         f for f in video_files
@@ -196,7 +221,7 @@ if "results" in st.session_state:
                     st.image(_crop_to_pil(crop), width=110)
                 with col_info:
                     st.markdown(f"**#{rank}** &nbsp; Score: `{score:.4f}`")
-                    st.markdown(f"📷 `{camera_label}`  &nbsp;  🕐 `{timestamp}`")
+                    st.markdown(f"📷 `{camera_label}`  &nbsp;  🕐 `{f_date.strftime('%d/%m/%Y')} {timestamp}`")
 
     if below:
         with st.expander(
@@ -209,5 +234,5 @@ if "results" in st.session_state:
                     st.image(_crop_to_pil(crop), width=80)
                 with col_info:
                     st.caption(
-                        f"Score `{score:.4f}` — `{camera_label}` @ `{timestamp}`"
+                        f"Score `{score:.4f}` — `{camera_label}` @ `{f_date.strftime('%d/%m/%Y')} {timestamp}`"
                     )
