@@ -4,7 +4,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli
 
 import streamlit as st
 from pathlib import Path
+from datetime import time as dtime, date as ddate, datetime
 import cv2
+import pandas as pd
 import torch.nn.functional as F
 from PIL import Image
 
@@ -31,6 +33,19 @@ PT_TO_EN = {
 
 COLORS_UPPER_PT = ["", "vermelho", "azul", "preto", "branco", "cinza", "verde", "amarelo", "laranja", "roxo", "marrom"]
 COLORS_LOWER_PT = ["", "preto", "azul", "cinza", "branco", "marrom", "verde"]
+
+# Demo camera coordinates (lat, lon) — fictional positions for the demo
+_CAMERA_COORDS = {
+    "passageway1-c1": (-23.5497, -46.6333),
+    "passageway1-c2": (-23.5503, -46.6341),
+    "passageway1-c3": (-23.5510, -46.6349),
+}
+
+def _camera_coords(stem, idx):
+    """Return (lat, lon) for a camera, falling back to offset from base."""
+    if stem in _CAMERA_COORDS:
+        return _CAMERA_COORDS[stem]
+    return -23.5497 + idx * 0.0006, -46.6333 + idx * 0.0008
 
 
 @st.cache_resource(show_spinner="Preparando referência de busca…")
@@ -69,6 +84,15 @@ with st.sidebar:
     if not video_files:
         st.warning("Nenhum vídeo encontrado em videos/")
         st.stop()
+
+    # Camera location map
+    map_rows = [
+        {"lat": lat, "lon": lon, "câmera": f.stem}
+        for i, f in enumerate(video_files)
+        for lat, lon in [_camera_coords(f.stem, i)]
+    ]
+    st.map(pd.DataFrame(map_rows), zoom=16, use_container_width=True)
+
     selected = [
         f for f in video_files
         if st.checkbox(f.stem.replace("-", " ").title(), value=True, key=f.name)
@@ -87,6 +111,15 @@ with st.sidebar:
     lower_en = PT_TO_EN.get(lower_pt, "")
     query = compose_query(upper_en, lower_en, backpack, hat, extra)
     st.info(f'**Query CLIP:** "{query}"')
+
+    st.divider()
+    st.header("📅 Período")
+    filter_date = st.date_input("Data", value=ddate.today())
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        filter_from = st.time_input("Das", value=dtime(0, 0))
+    with col_t2:
+        filter_to = st.time_input("Até", value=dtime(23, 59))
 
     search_btn = st.button(
         "🔍 Buscar",
@@ -127,20 +160,39 @@ if search_btn:
 
     st.session_state.results = results
     st.session_state.query = query
+    st.session_state.filter_date = filter_date
+    st.session_state.filter_from = filter_from
+    st.session_state.filter_to = filter_to
 
 # ── Results ───────────────────────────────────────────────────────────────────
+def _in_time_range(timestamp_str, from_t, to_t):
+    """timestamp_str is HH:MM:SS (video offset). Compare HH:MM only."""
+    try:
+        t = datetime.strptime(timestamp_str, "%H:%M:%S").time()
+        return from_t <= t <= to_t
+    except ValueError:
+        return True  # don't filter if unparseable
+
+
 if "results" in st.session_state:
     results = st.session_state.results
     saved_query = st.session_state.get("query", "")
+    f_date = st.session_state.get("filter_date", ddate.today())
+    f_from = st.session_state.get("filter_from", dtime(0, 0))
+    f_to   = st.session_state.get("filter_to",   dtime(23, 59))
 
-    above = [r for r in results if r[0] >= RELATIVE_THRESHOLD]
-    below = [r for r in results if r[0] < RELATIVE_THRESHOLD]
+    # Apply time filter
+    results_filtered = [r for r in results if _in_time_range(r[3], f_from, f_to)]
+
+    above = [r for r in results_filtered if r[0] >= RELATIVE_THRESHOLD]
+    below = [r for r in results_filtered if r[0] < RELATIVE_THRESHOLD]
 
     st.subheader(f'Resultados para: "{saved_query}"')
+    st.caption(f"📅 {f_date.strftime('%d/%m/%Y')}  🕐 {f_from.strftime('%H:%M')} – {f_to.strftime('%H:%M')}")
     m1, m2, m3 = st.columns(3)
     m1.metric("Correspondências", len(above))
     m2.metric("Abaixo do limiar", len(below))
-    m3.metric("Total avaliados", len(results))
+    m3.metric("Total avaliados", len(results_filtered))
 
     if not above:
         st.info(
@@ -157,6 +209,9 @@ if "results" in st.session_state:
                 with col_info:
                     st.markdown(f"**#{rank}** &nbsp; Score: `{score:.4f}`")
                     st.markdown(f"📷 `{camera_label}`  &nbsp;  🕐 `{timestamp}`")
+
+    if len(results_filtered) < len(results):
+        st.caption(f"⚠️ {len(results) - len(results_filtered)} detecções fora do período ocultadas.")
 
     if below:
         with st.expander(
