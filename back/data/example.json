@@ -1,0 +1,14 @@
+[
+  {
+    "id": "example_0000_0",
+    "camera_id": "example",
+    "camera": "Câmera Exemplo",
+    "timestamp": "00:00:00",
+    "timestamp_segundos": 0,
+    "cor_superior": "cinza",
+    "cor_inferior": "cinza",
+    "tem_mochila": true,
+    "tem_chapeu": false,
+    "crop": "crops/example.png"
+  }
+]
