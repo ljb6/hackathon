@@ -128,7 +128,7 @@ with st.sidebar:
 
 # ── Search ────────────────────────────────────────────────────────────────────
 if search_btn:
-    if suspect_bgr is None and query is None:
+    if suspect_bgr is None and not query:
         st.error("Imagem inválida. Tente outro arquivo.")
         st.stop()
 
