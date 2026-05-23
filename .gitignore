@@ -2,14 +2,23 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
+*.egg-info/
 .venv/
+venv/
 
 # CLIP / torch model cache
 back/data/crops/*.jpg
 back/data/crops/*.png
 back/data/*.json
 
-# Videos
+# Generated artifacts
+*.jpg
+*.jpeg
+*.png
+yolov8n.pt
+
+# Videos (large files)
 videos/
 
 # macOS
