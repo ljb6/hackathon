@@ -6,13 +6,13 @@ import streamlit as st
 from pathlib import Path
 from datetime import time as dtime, date as ddate, datetime
 import cv2
-import torch.nn.functional as F
 from PIL import Image
 
-from embedder import embed_text
 from main import collect_all_candidates
 from query_builder import compose_query
 from search import RELATIVE_THRESHOLD
+from multi_scorer import MultiAttributeScorer, ATTRIBUTE_THRESHOLD
+from query_expander import expand_query
 
 VIDEOS_DIR = Path(__file__).parent / "videos"
 
@@ -34,22 +34,24 @@ COLORS_UPPER_PT = ["", "vermelho", "azul", "preto", "branco", "cinza", "verde", 
 COLORS_LOWER_PT = ["", "preto", "azul", "cinza", "branco", "marrom", "verde"]
 
 
-@st.cache_resource(show_spinner="Preparando referência de busca…")
-def _baseline():
-    return embed_text("a person")
+@st.cache_resource(show_spinner="Carregando scorer de atributos…")
+def _scorer():
+    return MultiAttributeScorer()
 
 
-def _score_and_rank(query_emb, tagged, baseline_emb):
-    """
-    tagged: list of (camera_label, crop, img_emb, timestamp)
-    Returns list of (score, camera_label, crop, timestamp) sorted descending.
-    """
+def _score_and_rank(tagged, scorer, upper_color="", lower_color="",
+                    has_backpack=None, has_hat=None, extra=""):
     scored = []
     for camera_label, crop, img_emb, timestamp in tagged:
-        specific = F.cosine_similarity(query_emb, img_emb).item()
-        generic = F.cosine_similarity(baseline_emb, img_emb).item()
-        score = specific - generic
-        scored.append((score, camera_label, crop, timestamp))
+        total, breakdown = scorer.score(
+            img_emb,
+            upper_color=upper_color,
+            lower_color=lower_color,
+            has_backpack=has_backpack,
+            has_hat=has_hat,
+            extra=extra,
+        )
+        scored.append((total, breakdown, camera_label, crop, timestamp))
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored
 
@@ -82,13 +84,14 @@ with st.sidebar:
     lower_pt = st.selectbox("Cor — roupa inferior", COLORS_LOWER_PT)
     backpack = st.checkbox("Tem mochila")
     hat = st.checkbox("Tem chapéu")
-    extra = st.text_input("Outras características (em inglês)")
+    extra = st.text_input("Outras características")
 
-    # Translate PT colors to English for CLIP
     upper_en = PT_TO_EN.get(upper_pt, "")
     lower_en = PT_TO_EN.get(lower_pt, "")
     query = compose_query(upper_en, lower_en, backpack, hat, extra)
     st.info(f'**Query CLIP:** "{query}"')
+    if extra:
+        st.caption("📝 Outras características serão expandidas automaticamente ao buscar")
 
     st.divider()
     st.header("📅 Período")
@@ -108,8 +111,7 @@ with st.sidebar:
 
 # ── Search ────────────────────────────────────────────────────────────────────
 if search_btn:
-    baseline_emb = _baseline()
-    query_emb = embed_text(query)
+    scorer = _scorer()
     tagged = []  # (camera_label, crop, img_emb, timestamp)
 
     with st.status("Processando câmeras…", expanded=True) as status:
@@ -129,29 +131,55 @@ if search_btn:
                 tagged.append((camera_label, crop, img_emb, timestamp))
             st.write(f"✅ **{camera_label}** — {len(candidates)} detecções")
 
-        status.update(label="Calculando scores…", state="running")
-        results = _score_and_rank(query_emb, tagged, baseline_emb)
+        status.update(label="Expandindo query e calculando scores…", state="running")
+        expanded_extra = expand_query(extra) if extra else ""
+
+        has_structured = any([upper_pt, lower_pt, backpack, hat])
+        threshold = ATTRIBUTE_THRESHOLD if has_structured else RELATIVE_THRESHOLD
+
+        results = _score_and_rank(
+            tagged,
+            scorer,
+            upper_color=upper_en,
+            lower_color=lower_en,
+            has_backpack=backpack if backpack else None,
+            has_hat=hat if hat else None,
+            extra=expanded_extra,
+        )
         status.update(
             label=f"Concluído — {len(results)} candidatos avaliados",
             state="complete",
         )
 
+    if expanded_extra and expanded_extra != extra:
+        st.caption(f'📝 Extra expandido: "{expanded_extra}"')
+
     st.session_state.results = results
     st.session_state.query = query
+    st.session_state.threshold = threshold
     st.session_state.filter_date = filter_date
     st.session_state.filter_from = filter_from
     st.session_state.filter_to = filter_to
 
 # ── Results ───────────────────────────────────────────────────────────────────
+_ATTR_LABELS = {
+    "upper_color": "👕 Superior",
+    "lower_color": "👖 Inferior",
+    "backpack":    "🎒 Mochila",
+    "hat":         "🧢 Chapéu",
+    "extra":       "📝 Extra",
+}
+
 if "results" in st.session_state:
     results = st.session_state.results
     saved_query = st.session_state.get("query", "")
+    threshold = st.session_state.get("threshold", ATTRIBUTE_THRESHOLD)
     f_date = st.session_state.get("filter_date", ddate.today())
     f_from = st.session_state.get("filter_from", dtime(0, 0))
     f_to   = st.session_state.get("filter_to",   dtime(23, 59))
 
-    above = [r for r in results if r[0] >= RELATIVE_THRESHOLD]
-    below = [r for r in results if r[0] < RELATIVE_THRESHOLD]
+    above = [r for r in results if r[0] >= threshold]
+    below = [r for r in results if r[0] < threshold]
 
     st.subheader(f'Resultados para: "{saved_query}"')
     st.caption(f"📅 {f_date.strftime('%d/%m/%Y')}  🕐 {f_from.strftime('%H:%M')} – {f_to.strftime('%H:%M')}")
@@ -167,7 +195,7 @@ if "results" in st.session_state:
         )
     else:
         st.markdown("---")
-        for rank, (score, camera_label, crop, timestamp) in enumerate(above, 1):
+        for rank, (score, breakdown, camera_label, crop, timestamp) in enumerate(above, 1):
             with st.container(border=True):
                 col_img, col_info = st.columns([1, 4])
                 with col_img:
@@ -175,13 +203,16 @@ if "results" in st.session_state:
                 with col_info:
                     st.markdown(f"**#{rank}** &nbsp; Score: `{score:.4f}`")
                     st.markdown(f"📷 `{camera_label}`  &nbsp;  🕐 `{f_date.strftime('%d/%m/%Y')} {timestamp}`")
+                    if breakdown:
+                        parts = [f"{_ATTR_LABELS.get(k, k)}: `{v:.0%}`" for k, v in breakdown.items()]
+                        st.caption("  |  ".join(parts))
 
     if below:
         with st.expander(
             f"Ver {len(below)} detecções abaixo do limiar "
             f"(possíveis falsos negativos)"
         ):
-            for score, camera_label, crop, timestamp in below:
+            for score, breakdown, camera_label, crop, timestamp in below:
                 col_img, col_info = st.columns([1, 5])
                 with col_img:
                     st.image(_crop_to_pil(crop), width=80)
