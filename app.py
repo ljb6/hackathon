@@ -14,30 +14,41 @@ from query_builder import compose_query
 from search import RELATIVE_THRESHOLD
 
 VIDEOS_DIR = Path(__file__).parent / "videos"
-COLORS_UPPER = [
-    "", "vermelho", "azul", "preto", "branco", "cinza",
-    "verde", "amarelo", "laranja", "roxo", "marrom",
-]
-COLORS_LOWER = ["", "preto", "azul", "cinza", "branco", "marrom", "verde"]
+
+# UI labels in Portuguese → CLIP English tokens
+PT_TO_EN = {
+    "vermelho": "red",
+    "azul": "blue",
+    "preto": "black",
+    "branco": "white",
+    "cinza": "gray",
+    "verde": "green",
+    "amarelo": "yellow",
+    "laranja": "orange",
+    "roxo": "purple",
+    "marrom": "brown",
+}
+
+COLORS_UPPER_PT = ["", "vermelho", "azul", "preto", "branco", "cinza", "verde", "amarelo", "laranja", "roxo", "marrom"]
+COLORS_LOWER_PT = ["", "preto", "azul", "cinza", "branco", "marrom", "verde"]
 
 
-@st.cache_resource(show_spinner="Carregando modelos CLIP e YOLO…")
+@st.cache_resource(show_spinner="Preparando referência de busca…")
 def _baseline():
     return embed_text("a person")
 
 
 def _score_and_rank(query_emb, tagged, baseline_emb):
     """
-    tagged: list of (camera_label, crop, box, frame, img_emb, timestamp)
-    Returns list of (score, camera_label, crop, box, frame, timestamp)
-    sorted descending by relative score.
+    tagged: list of (camera_label, crop, img_emb, timestamp)
+    Returns list of (score, camera_label, crop, timestamp) sorted descending.
     """
     scored = []
-    for camera_label, crop, box, frame, img_emb, timestamp in tagged:
+    for camera_label, crop, img_emb, timestamp in tagged:
         specific = F.cosine_similarity(query_emb, img_emb).item()
         generic = F.cosine_similarity(baseline_emb, img_emb).item()
         score = specific - generic
-        scored.append((score, camera_label, crop, box, frame, timestamp))
+        scored.append((score, camera_label, crop, timestamp))
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored
 
@@ -57,6 +68,7 @@ with st.sidebar:
     video_files = sorted(VIDEOS_DIR.glob("*.mp4"))
     if not video_files:
         st.warning("Nenhum vídeo encontrado em videos/")
+        st.stop()
     selected = [
         f for f in video_files
         if st.checkbox(f.stem.replace("-", " ").title(), value=True, key=f.name)
@@ -64,14 +76,17 @@ with st.sidebar:
 
     st.divider()
     st.header("🕵️ Suspeito")
-    upper = st.selectbox("Cor — roupa superior", COLORS_UPPER)
-    lower = st.selectbox("Cor — roupa inferior", COLORS_LOWER)
+    upper_pt = st.selectbox("Cor — roupa superior", COLORS_UPPER_PT)
+    lower_pt = st.selectbox("Cor — roupa inferior", COLORS_LOWER_PT)
     backpack = st.checkbox("Tem mochila")
     hat = st.checkbox("Tem chapéu")
-    extra = st.text_input("Outras características")
+    extra = st.text_input("Outras características (em inglês)")
 
-    query = compose_query(upper, lower, backpack, hat, extra)
-    st.info(f'**Query:** "{query}"')
+    # Translate PT colors to English for CLIP
+    upper_en = PT_TO_EN.get(upper_pt, "")
+    lower_en = PT_TO_EN.get(lower_pt, "")
+    query = compose_query(upper_en, lower_en, backpack, hat, extra)
+    st.info(f'**Query CLIP:** "{query}"')
 
     search_btn = st.button(
         "🔍 Buscar",
@@ -84,14 +99,23 @@ with st.sidebar:
 if search_btn:
     baseline_emb = _baseline()
     query_emb = embed_text(query)
-    tagged = []
+    tagged = []  # (camera_label, crop, img_emb, timestamp)
 
     with st.status("Processando câmeras…", expanded=True) as status:
         for video_path in selected:
             st.write(f"⏳ Processando **{video_path.stem}**…")
-            camera_label, candidates = collect_all_candidates(str(video_path))
-            for c in candidates:
-                tagged.append((camera_label, *c))
+            try:
+                camera_label, candidates = collect_all_candidates(str(video_path))
+            except Exception as e:
+                st.error(f"Erro ao processar {video_path.stem}: {e}")
+                continue
+
+            if not candidates:
+                st.warning(f"⚠️ {video_path.stem} — nenhuma pessoa detectada (verifique o arquivo)")
+                continue
+
+            for crop, box, frame, img_emb, timestamp in candidates:
+                tagged.append((camera_label, crop, img_emb, timestamp))
             st.write(f"✅ **{camera_label}** — {len(candidates)} detecções")
 
         status.update(label="Calculando scores…", state="running")
@@ -125,23 +149,21 @@ if "results" in st.session_state:
         )
     else:
         st.markdown("---")
-        for rank, (score, camera_label, crop, box, frame, timestamp) in enumerate(above, 1):
+        for rank, (score, camera_label, crop, timestamp) in enumerate(above, 1):
             with st.container(border=True):
                 col_img, col_info = st.columns([1, 4])
                 with col_img:
                     st.image(_crop_to_pil(crop), width=110)
                 with col_info:
                     st.markdown(f"**#{rank}** &nbsp; Score: `{score:.4f}`")
-                    st.markdown(
-                        f"📷 `{camera_label}`  &nbsp;  🕐 `{timestamp}`"
-                    )
+                    st.markdown(f"📷 `{camera_label}`  &nbsp;  🕐 `{timestamp}`")
 
     if below:
         with st.expander(
             f"Ver {len(below)} detecções abaixo do limiar "
             f"(possíveis falsos negativos)"
         ):
-            for score, camera_label, crop, box, frame, timestamp in below:
+            for score, camera_label, crop, timestamp in below:
                 col_img, col_info = st.columns([1, 5])
                 with col_img:
                     st.image(_crop_to_pil(crop), width=80)
