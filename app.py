@@ -6,8 +6,6 @@ import streamlit as st
 from pathlib import Path
 from datetime import time as dtime, date as ddate, datetime
 import cv2
-import pandas as pd
-import pydeck as pdk
 import torch.nn.functional as F
 from PIL import Image
 
@@ -34,19 +32,6 @@ PT_TO_EN = {
 
 COLORS_UPPER_PT = ["", "vermelho", "azul", "preto", "branco", "cinza", "verde", "amarelo", "laranja", "roxo", "marrom"]
 COLORS_LOWER_PT = ["", "preto", "azul", "cinza", "branco", "marrom", "verde"]
-
-# Demo camera coordinates (lat, lon) — fictional positions for the demo
-_CAMERA_COORDS = {
-    "passageway1-c1": (-23.5497, -46.6333),
-    "passageway1-c2": (-23.5503, -46.6341),
-    "passageway1-c3": (-23.5510, -46.6349),
-}
-
-def _camera_coords(stem, idx):
-    """Return (lat, lon) for a camera, falling back to offset from base."""
-    if stem in _CAMERA_COORDS:
-        return _CAMERA_COORDS[stem]
-    return -23.5497 + idx * 0.0006, -46.6333 + idx * 0.0008
 
 
 @st.cache_resource(show_spinner="Preparando referência de busca…")
@@ -85,38 +70,6 @@ with st.sidebar:
     if not video_files:
         st.warning("Nenhum vídeo encontrado em videos/")
         st.stop()
-
-    # Camera location map
-    map_rows = [
-        {"lat": lat, "lon": lon, "câmera": f.stem, "icon": "📷"}
-        for i, f in enumerate(video_files)
-        for lat, lon in [_camera_coords(f.stem, i)]
-    ]
-    df_map = pd.DataFrame(map_rows)
-    center_lat = df_map["lat"].mean()
-    center_lon = df_map["lon"].mean()
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[
-                pdk.Layer(
-                    "TextLayer",
-                    data=df_map,
-                    get_position=["lon", "lat"],
-                    get_text="icon",
-                    get_size=28,
-                    get_color=[0, 0, 0, 255],
-                    get_alignment_baseline="'bottom'",
-                )
-            ],
-            initial_view_state=pdk.ViewState(
-                latitude=center_lat,
-                longitude=center_lon,
-                zoom=16,
-            ),
-            map_style="mapbox://styles/mapbox/streets-v11",
-        ),
-        use_container_width=True,
-    )
 
     selected = [
         f for f in video_files
