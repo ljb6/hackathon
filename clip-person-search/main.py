@@ -1,3 +1,4 @@
+import os
 import cv2
 from datetime import datetime
 
@@ -21,20 +22,24 @@ def timestamp_from_frame(frame_count, fps):
 def draw_result(frame, box, score, query, timestamp):
     x1, y1, x2, y2 = box
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-    label = f"MATCH {score:.2f} | {query} | {timestamp}"
+    label = f"MATCH {score:.3f} | {query} | {timestamp}"
     cv2.putText(frame, label, (x1, max(y1 - 10, 10)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     return frame
 
 
-def run_video(source, query_emb, query):
+def _collect_candidates(source, query_emb, baseline_emb):
+    """
+    Process one video source. Returns (camera_label, result) where result is
+    (frame, box, score, timestamp) or None if no match above threshold.
+    camera_label is the filename stem (e.g. "passageway1-c1").
+    """
     cap = cv2.VideoCapture(source)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    camera_label = os.path.splitext(os.path.basename(source))[0]
     candidates = []
     frame_count = 0
     tracker = PersonTracker()
-
-    print("Processing video...")
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -53,26 +58,60 @@ def run_video(source, query_emb, query):
     cap.release()
 
     if not candidates:
-        print("No persons detected.")
-        return
+        return camera_label, None
 
-    print(f"Searching among {len(candidates)} detections...")
-    result = find_best_match(query_emb, candidates)
+    result = find_best_match(query_emb, candidates, baseline_embedding=baseline_emb)
+    return camera_label, result
+
+
+def run_video(source, query_emb, query, baseline_emb):
+    """Single camera batch mode."""
+    print(f"Processing {source}...")
+    camera_label, result = _collect_candidates(source, query_emb, baseline_emb)
 
     if result is None:
-        print("No match found above similarity threshold.")
+        print(f"[{camera_label}] No match found above threshold.")
         return
 
     frame, box, score, timestamp = result
     output = draw_result(frame, box, score, query, timestamp)
-    cv2.imshow(f"Best match — score: {score:.2f} @ {timestamp}", output)
-    cv2.imwrite("result.jpg", output)
-    print(f"Match! Score: {score:.2f} at {timestamp} — saved to result.jpg")
+    filename = f"result_{camera_label}.jpg"
+    cv2.imwrite(filename, output)
+    print(f"[{camera_label}] Match! Score: {score:.3f} at {timestamp} — saved to {filename}")
+    cv2.imshow(f"{camera_label} — {score:.3f} @ {timestamp}", output)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
 
-def run_live(query_emb, query):
+def run_multi_video(sources, query_emb, query, baseline_emb):
+    """Process multiple cameras, display all per-camera best matches at the end."""
+    per_camera = []
+    for source in sources:
+        print(f"Processing {source}...")
+        camera_label, result = _collect_candidates(source, query_emb, baseline_emb)
+        per_camera.append((camera_label, result))
+        status = f"Score: {result[2]:.3f} @ {result[3]}" if result else "no match"
+        print(f"  [{camera_label}] {status}")
+
+    matched = [(label, r) for label, r in per_camera if r is not None]
+
+    if not matched:
+        print("\nNo matches found in any camera above similarity threshold.")
+        return
+
+    print(f"\n{len(matched)}/{len(sources)} cameras matched:")
+    for camera_label, (frame, box, score, timestamp) in matched:
+        output = draw_result(frame, box, score, query, timestamp)
+        filename = f"result_{camera_label}.jpg"
+        cv2.imwrite(filename, output)
+        print(f"  [{camera_label}] Score: {score:.3f} at {timestamp} → {filename}")
+        cv2.imshow(f"{camera_label} — {score:.3f} @ {timestamp}", output)
+
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+def run_live(query_emb, query, baseline_emb):
     cap = cv2.VideoCapture(0)
     frame_count = 0
     tracker = PersonTracker()
@@ -90,13 +129,14 @@ def run_live(query_emb, query):
             for crop, box in extract_persons(frame):
                 img_emb, re_embedded = tracker.update(box, crop, frame_count, embed_image)
                 if re_embedded:
-                    score, matched = is_match(query_emb, img_emb)
+                    score, matched = is_match(query_emb, img_emb,
+                                              baseline_embedding=baseline_emb)
                     if matched:
                         output = draw_result(frame.copy(), box, score, query, timestamp)
                         cv2.imshow("MATCH FOUND", output)
                         filename = f"match_{timestamp.replace(':', '')}.jpg"
                         cv2.imwrite(filename, output)
-                        print(f"Match! Score: {score:.2f} at {timestamp} — saved to {filename}")
+                        print(f"Match! Score: {score:.3f} at {timestamp} — saved to {filename}")
 
         cv2.imshow("Live Feed", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -107,14 +147,23 @@ def run_live(query_emb, query):
 
 
 def main():
-    source = input("Video file path (or press Enter for live webcam): ").strip()
+    sources_input = input(
+        "Video file paths (comma-separated, or Enter for live webcam): "
+    ).strip()
     query = prompt_query()
-    query_emb = embed_text(query)
 
-    if source:
-        run_video(source, query_emb, query)
+    print("Loading query embeddings...")
+    query_emb    = embed_text(query)
+    baseline_emb = embed_text("a person")
+
+    if sources_input:
+        sources = [s.strip() for s in sources_input.split(",") if s.strip()]
+        if len(sources) == 1:
+            run_video(sources[0], query_emb, query, baseline_emb)
+        else:
+            run_multi_video(sources, query_emb, query, baseline_emb)
     else:
-        run_live(query_emb, query)
+        run_live(query_emb, query, baseline_emb)
 
 
 if __name__ == "__main__":
