@@ -134,7 +134,11 @@ if search_btn:
 
     baseline_emb = _baseline()
     if suspect_bgr is not None:
-        query_emb = embed_image(suspect_bgr)
+        try:
+            query_emb = embed_image(suspect_bgr)
+        except Exception as e:
+            st.error(f"Não foi possível processar a imagem: {e}")
+            st.stop()
     else:
         query_emb = embed_text(query)
     tagged = []  # (camera_label, crop, img_emb, timestamp)
