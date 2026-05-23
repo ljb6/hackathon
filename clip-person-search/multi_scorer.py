@@ -41,7 +41,7 @@ HAT_PHRASES = [
     "a person with no hat or cap",
 ]
 
-ATTRIBUTE_THRESHOLD = 0.35
+ATTRIBUTE_THRESHOLD = 0.55
 
 
 class MultiAttributeScorer:
