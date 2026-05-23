@@ -8,11 +8,11 @@ from datetime import time as dtime, date as ddate, datetime
 import cv2
 from PIL import Image
 
+import torch.nn.functional as F
+from embedder import embed_text
 from main import collect_all_candidates
 from query_builder import compose_query
 from search import RELATIVE_THRESHOLD
-from multi_scorer import MultiAttributeScorer, ATTRIBUTE_THRESHOLD
-from query_expander import expand_query
 
 VIDEOS_DIR = Path(__file__).parent / "videos"
 
@@ -34,24 +34,18 @@ COLORS_UPPER_PT = ["", "vermelho", "azul", "preto", "branco", "cinza", "verde", 
 COLORS_LOWER_PT = ["", "preto", "azul", "cinza", "branco", "marrom", "verde"]
 
 
-@st.cache_resource(show_spinner="Carregando scorer de atributos…")
-def _scorer():
-    return MultiAttributeScorer()
+@st.cache_resource(show_spinner="Preparando referência de busca…")
+def _baseline():
+    return embed_text("a person")
 
 
-def _score_and_rank(tagged, scorer, upper_color="", lower_color="",
-                    has_backpack=None, has_hat=None, extra=""):
+def _score_and_rank(query_emb, tagged, baseline_emb):
     scored = []
     for camera_label, crop, img_emb, timestamp in tagged:
-        total, breakdown = scorer.score(
-            img_emb,
-            upper_color=upper_color,
-            lower_color=lower_color,
-            has_backpack=has_backpack,
-            has_hat=has_hat,
-            extra=extra,
-        )
-        scored.append((total, breakdown, camera_label, crop, timestamp))
+        specific = F.cosine_similarity(query_emb, img_emb).item()
+        generic  = F.cosine_similarity(baseline_emb, img_emb).item()
+        score = specific - generic
+        scored.append((score, {}, camera_label, crop, timestamp))
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored
 
@@ -90,8 +84,6 @@ with st.sidebar:
     lower_en = PT_TO_EN.get(lower_pt, "")
     query = compose_query(upper_en, lower_en, backpack, hat, extra)
     st.info(f'**Query CLIP:** "{query}"')
-    if extra:
-        st.caption("📝 Outras características serão expandidas automaticamente ao buscar")
 
     st.divider()
     st.header("📅 Período")
@@ -111,7 +103,8 @@ with st.sidebar:
 
 # ── Search ────────────────────────────────────────────────────────────────────
 if search_btn:
-    scorer = _scorer()
+    baseline_emb = _baseline()
+    query_emb = embed_text(query)
     tagged = []  # (camera_label, crop, img_emb, timestamp)
 
     with st.status("Processando câmeras…", expanded=True) as status:
@@ -131,32 +124,16 @@ if search_btn:
                 tagged.append((camera_label, crop, img_emb, timestamp))
             st.write(f"✅ **{camera_label}** — {len(candidates)} detecções")
 
-        status.update(label="Expandindo query e calculando scores…", state="running")
-        expanded_extra = expand_query(extra) if extra else ""
-
-        has_structured = any([upper_pt, lower_pt, backpack, hat])
-        threshold = ATTRIBUTE_THRESHOLD if has_structured else RELATIVE_THRESHOLD
-
-        results = _score_and_rank(
-            tagged,
-            scorer,
-            upper_color=upper_en,
-            lower_color=lower_en,
-            has_backpack=backpack if backpack else None,
-            has_hat=hat if hat else None,
-            extra=expanded_extra,
-        )
+        status.update(label="Calculando scores…", state="running")
+        results = _score_and_rank(query_emb, tagged, baseline_emb)
         status.update(
             label=f"Concluído — {len(results)} candidatos avaliados",
             state="complete",
         )
 
-    if expanded_extra and expanded_extra != extra:
-        st.caption(f'📝 Extra expandido: "{expanded_extra}"')
-
     st.session_state.results = results
     st.session_state.query = query
-    st.session_state.threshold = threshold
+    st.session_state.threshold = RELATIVE_THRESHOLD
     st.session_state.filter_date = filter_date
     st.session_state.filter_from = filter_from
     st.session_state.filter_to = filter_to
@@ -173,7 +150,7 @@ _ATTR_LABELS = {
 if "results" in st.session_state:
     results = st.session_state.results
     saved_query = st.session_state.get("query", "")
-    threshold = st.session_state.get("threshold", ATTRIBUTE_THRESHOLD)
+    threshold = st.session_state.get("threshold", RELATIVE_THRESHOLD)
     f_date = st.session_state.get("filter_date", ddate.today())
     f_from = st.session_state.get("filter_from", dtime(0, 0))
     f_to   = st.session_state.get("filter_to",   dtime(23, 59))
