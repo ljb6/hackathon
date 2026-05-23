@@ -165,15 +165,6 @@ if search_btn:
     st.session_state.filter_to = filter_to
 
 # ── Results ───────────────────────────────────────────────────────────────────
-def _in_time_range(timestamp_str, from_t, to_t):
-    """timestamp_str is HH:MM:SS (video offset). Compare HH:MM only."""
-    try:
-        t = datetime.strptime(timestamp_str, "%H:%M:%S").time()
-        return from_t <= t <= to_t
-    except ValueError:
-        return True  # don't filter if unparseable
-
-
 if "results" in st.session_state:
     results = st.session_state.results
     saved_query = st.session_state.get("query", "")
@@ -181,18 +172,15 @@ if "results" in st.session_state:
     f_from = st.session_state.get("filter_from", dtime(0, 0))
     f_to   = st.session_state.get("filter_to",   dtime(23, 59))
 
-    # Apply time filter
-    results_filtered = [r for r in results if _in_time_range(r[3], f_from, f_to)]
-
-    above = [r for r in results_filtered if r[0] >= RELATIVE_THRESHOLD]
-    below = [r for r in results_filtered if r[0] < RELATIVE_THRESHOLD]
+    above = [r for r in results if r[0] >= RELATIVE_THRESHOLD]
+    below = [r for r in results if r[0] < RELATIVE_THRESHOLD]
 
     st.subheader(f'Resultados para: "{saved_query}"')
     st.caption(f"📅 {f_date.strftime('%d/%m/%Y')}  🕐 {f_from.strftime('%H:%M')} – {f_to.strftime('%H:%M')}")
     m1, m2, m3 = st.columns(3)
     m1.metric("Correspondências", len(above))
     m2.metric("Abaixo do limiar", len(below))
-    m3.metric("Total avaliados", len(results_filtered))
+    m3.metric("Total avaliados", len(results))
 
     if not above:
         st.info(
@@ -209,9 +197,6 @@ if "results" in st.session_state:
                 with col_info:
                     st.markdown(f"**#{rank}** &nbsp; Score: `{score:.4f}`")
                     st.markdown(f"📷 `{camera_label}`  &nbsp;  🕐 `{timestamp}`")
-
-    if len(results_filtered) < len(results):
-        st.caption(f"⚠️ {len(results) - len(results_filtered)} detecções fora do período ocultadas.")
 
     if below:
         with st.expander(
