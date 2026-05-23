@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli
 
 import streamlit as st
 from pathlib import Path
+from datetime import time as dtime, date as ddate, datetime
 import cv2
 import torch.nn.functional as F
 from PIL import Image
@@ -69,6 +70,7 @@ with st.sidebar:
     if not video_files:
         st.warning("Nenhum vídeo encontrado em videos/")
         st.stop()
+
     selected = [
         f for f in video_files
         if st.checkbox(f.stem.replace("-", " ").title(), value=True, key=f.name)
@@ -87,6 +89,15 @@ with st.sidebar:
     lower_en = PT_TO_EN.get(lower_pt, "")
     query = compose_query(upper_en, lower_en, backpack, hat, extra)
     st.info(f'**Query CLIP:** "{query}"')
+
+    st.divider()
+    st.header("📅 Período")
+    filter_date = st.date_input("Data", value=ddate.today())
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        filter_from = st.time_input("Das", value=dtime(0, 0))
+    with col_t2:
+        filter_to = st.time_input("Até", value=dtime(23, 59))
 
     search_btn = st.button(
         "🔍 Buscar",
@@ -127,16 +138,23 @@ if search_btn:
 
     st.session_state.results = results
     st.session_state.query = query
+    st.session_state.filter_date = filter_date
+    st.session_state.filter_from = filter_from
+    st.session_state.filter_to = filter_to
 
 # ── Results ───────────────────────────────────────────────────────────────────
 if "results" in st.session_state:
     results = st.session_state.results
     saved_query = st.session_state.get("query", "")
+    f_date = st.session_state.get("filter_date", ddate.today())
+    f_from = st.session_state.get("filter_from", dtime(0, 0))
+    f_to   = st.session_state.get("filter_to",   dtime(23, 59))
 
     above = [r for r in results if r[0] >= RELATIVE_THRESHOLD]
     below = [r for r in results if r[0] < RELATIVE_THRESHOLD]
 
     st.subheader(f'Resultados para: "{saved_query}"')
+    st.caption(f"📅 {f_date.strftime('%d/%m/%Y')}  🕐 {f_from.strftime('%H:%M')} – {f_to.strftime('%H:%M')}")
     m1, m2, m3 = st.columns(3)
     m1.metric("Correspondências", len(above))
     m2.metric("Abaixo do limiar", len(below))
@@ -156,7 +174,7 @@ if "results" in st.session_state:
                     st.image(_crop_to_pil(crop), width=110)
                 with col_info:
                     st.markdown(f"**#{rank}** &nbsp; Score: `{score:.4f}`")
-                    st.markdown(f"📷 `{camera_label}`  &nbsp;  🕐 `{timestamp}`")
+                    st.markdown(f"📷 `{camera_label}`  &nbsp;  🕐 `{f_date.strftime('%d/%m/%Y')} {timestamp}`")
 
     if below:
         with st.expander(
@@ -169,5 +187,5 @@ if "results" in st.session_state:
                     st.image(_crop_to_pil(crop), width=80)
                 with col_info:
                     st.caption(
-                        f"Score `{score:.4f}` — `{camera_label}` @ `{timestamp}`"
+                        f"Score `{score:.4f}` — `{camera_label}` @ `{f_date.strftime('%d/%m/%Y')} {timestamp}`"
                     )
