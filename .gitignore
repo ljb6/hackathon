@@ -18,8 +18,5 @@ back/data/*.json
 *.png
 yolov8n.pt
 
-# Videos (large files)
-videos/
-
 # macOS
 .DS_Store
