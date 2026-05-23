@@ -28,10 +28,11 @@ def draw_result(frame, box, score, query, timestamp):
     return frame
 
 
-def _collect_candidates(source, query_emb, baseline_emb):
+def collect_all_candidates(source):
     """
-    Process one video source. Returns (camera_label, result) where result is
-    (frame, box, score, timestamp) or None if no match above threshold.
+    Process one video source. Returns (camera_label, candidates) where candidates is a
+    list of (crop, box, frame, img_emb, timestamp) for every detected person, de-duplicated
+    by the tracker and sampled every SAMPLE_EVERY frames.
     camera_label is the filename stem (e.g. "passageway1-c1").
     """
     cap = cv2.VideoCapture(source)
@@ -56,10 +57,17 @@ def _collect_candidates(source, query_emb, baseline_emb):
                 candidates.append((crop, box, frame.copy(), img_emb, timestamp))
 
     cap.release()
+    return camera_label, candidates
 
+
+def _collect_candidates(source, query_emb, baseline_emb):
+    """
+    Process one video source. Returns (camera_label, result) where result is
+    (frame, box, score, timestamp) or None if no match above threshold.
+    """
+    camera_label, candidates = collect_all_candidates(source)
     if not candidates:
         return camera_label, None
-
     result = find_best_match(query_emb, candidates, baseline_embedding=baseline_emb)
     return camera_label, result
 
